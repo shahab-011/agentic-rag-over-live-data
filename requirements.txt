@@ -1,0 +1,27 @@
+# Core application and agent workflow
+langgraph
+langchain-core
+langchain-groq
+pydantic
+python-dotenv
+
+# GitHub integration (REST API and optional MCP support)
+PyGithub
+httpx
+mcp
+langchain-mcp-adapters
+
+# Gmail integration and Google OAuth
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+
+# CLI and configuration
+rich
+typer
+
+# Testing and quality
+pytest
+pytest-asyncio
+ruff

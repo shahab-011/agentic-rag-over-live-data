@@ -1,0 +1,7 @@
+step-1 : creating virtual environment
+uv init
+uv venv
+.venv\Scripts\Activate.ps1
+
+step-2 :
+
