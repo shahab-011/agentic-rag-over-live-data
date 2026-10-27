@@ -7,6 +7,10 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from agentic_rag_over_live_data_and_memory.gmail_retriever import (
+    is_gmail_authenticated,
+    is_gmail_configured,
+)
 from agentic_rag_over_live_data_and_memory.jira_retriever import (
     is_jira_configured,
 )
@@ -50,6 +54,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "github": bool(os.getenv("GITHUB_TOKEN")),
                     "notion": bool(os.getenv("NOTION_API_KEY")),
                     "jira": is_jira_configured(),
+                    "gmail": is_gmail_configured(),
+                    "gmail_authenticated": is_gmail_authenticated(),
                 },
             )
             return

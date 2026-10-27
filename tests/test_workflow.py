@@ -7,6 +7,7 @@ def test_langgraph_routes_each_source_and_collects_results(monkeypatch) -> None:
     github_questions = []
     jira_questions = []
     notion_questions = []
+    gmail_questions = []
     answer_input = {}
 
     monkeypatch.setattr(
@@ -43,12 +44,17 @@ def test_langgraph_routes_each_source_and_collects_results(monkeypatch) -> None:
         jira_questions.append(subquestion)
         return {"evidence": {"question": subquestion}}
 
+    async def fake_retrieve_gmail(subquestion: str) -> dict:
+        gmail_questions.append(subquestion)
+        return {"evidence": {"question": subquestion}}
+
     def fake_generate_answer(question, retrieval_results):
         answer_input["question"] = question
         answer_input["retrieval_results"] = retrieval_results
         return "Grounded answer.", []
 
     monkeypatch.setattr(workflow, "retrieve_github", fake_retrieve_github)
+    monkeypatch.setattr(workflow, "retrieve_gmail", fake_retrieve_gmail)
     monkeypatch.setattr(workflow, "retrieve_notion", fake_retrieve_notion)
     monkeypatch.setattr(workflow, "retrieve_jira", fake_retrieve_jira)
     monkeypatch.setattr(
@@ -65,6 +71,7 @@ def test_langgraph_routes_each_source_and_collects_results(monkeypatch) -> None:
     assert github_questions == ["GitHub question", "cross-source question"]
     assert notion_questions == ["cross-source question"]
     assert jira_questions == ["cross-source question"]
+    assert gmail_questions == ["cross-source question"]
     assert [item.source for item in result.retrieval_results] == [
         "github",
         "github",
@@ -75,7 +82,7 @@ def test_langgraph_routes_each_source_and_collects_results(monkeypatch) -> None:
     assert [item.status for item in result.retrieval_results] == [
         "success",
         "success",
-        "not_implemented",
+        "success",
         "success",
         "success",
     ]

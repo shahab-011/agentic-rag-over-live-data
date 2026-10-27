@@ -17,6 +17,15 @@ const sourceLabels = {
   jira: "Jira",
 };
 
+function evidenceCount(result) {
+  const evidence = result?.result?.evidence;
+  if (Array.isArray(evidence)) return evidence.length;
+  if (evidence && typeof evidence === "object") {
+    return Object.keys(evidence).length;
+  }
+  return evidence ? 1 : 0;
+}
+
 function Icon({ name, size = 18 }) {
   const common = {
     width: size,
@@ -37,6 +46,7 @@ function Icon({ name, size = 18 }) {
     search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></>,
     github: <><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 6v-3.9a3.4 3.4 0 0 0-.9-2.7c3-.3 6.2-1.5 6.2-6.8A5.3 5.3 0 0 0 19 4.9 4.9 4.9 0 0 0 18.9 1S17.7.7 15 2.5a13.5 13.5 0 0 0-7 0C5.3.7 4.1 1 4.1 1A4.9 4.9 0 0 0 4 4.9a5.3 5.3 0 0 0-1.3 3.7c0 5.3 3.2 6.5 6.2 6.8a3.4 3.4 0 0 0-.9 2.7V22" /></>,
     jira: <><path d="M12 3h8l-8 9 8 9h-8l-8-9 8-9Z" /><path d="M4 3h8l-8 9 8 9H4l-8-9 8-9Z" transform="translate(4 0)" /></>,
+    gmail: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></>,
     check: <><path d="m5 12 4 4L19 6" /></>,
     clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
     chevron: <><path d="m9 18 6-6-6-6" /></>,
@@ -110,11 +120,10 @@ function App() {
 
         <div className="workspace-switcher">
           <span className="workspace-avatar">A</span>
-          <span className="workspace-copy"><strong>Alam workspace</strong><small>Personal workspace</small></span>
-          <span className="switcher-dots">···</span>
+          <span className="workspace-copy"><strong>Workspace</strong></span>
         </div>
 
-        <div className="nav-section-label">WORKSPACE</div>
+        <div className="nav-section-label">ORBIT</div>
         <nav className="main-nav" aria-label="Main navigation">
           <a className="nav-item active" href="#ask"><Icon name="spark" /><span>Ask Orbit</span></a>
           <a className="nav-item" href="#sources"><Icon name="github" /><span>Connected sources</span><span className="nav-count">{sources ? connectedSourceCount : "—"}</span></a>
@@ -126,6 +135,7 @@ function App() {
               { key: "github", label: "GitHub", icon: <Icon name="github" size={15} /> },
               { key: "notion", label: "Notion", icon: <span className="notion-mark">N</span> },
               { key: "jira", label: "Jira", icon: <Icon name="jira" size={15} /> },
+              { key: "gmail", label: "Gmail", icon: <Icon name="gmail" size={15} /> },
             ].map((source) => {
               const connected = sources?.[source.key];
               return (
@@ -137,10 +147,9 @@ function App() {
               );
             })}
           </div>
-          <button className="profile-row" type="button">
+          <button className="profile-row" type="button" aria-label="Profile">
             <span className="profile-avatar">SA</span>
-            <span className="profile-copy"><strong>Shahab Alam</strong><small>Free plan</small></span>
-            <span className="switcher-dots">···</span>
+            <span className="profile-copy"><strong>Shahab Alam</strong></span>
           </button>
         </div>
       </aside>
@@ -148,15 +157,13 @@ function App() {
       <main className="main-area" id="ask">
         <header className="topbar">
           <div className="breadcrumbs"><span>Workspace</span><Icon name="chevron" size={14} /><strong>Ask Orbit</strong></div>
-          <div className="topbar-right"><span className="status-pill"><span className="live-dot" /> All systems operational</span><span className="top-avatar">SA</span></div>
+          <div className="topbar-right"><span className="top-avatar">SA</span></div>
         </header>
 
         <div className={`content ${result ? "content-results" : ""}`}>
           {!result && !loading && (
             <section className="welcome">
-              <div className="welcome-kicker"><span className="kicker-line" /> YOUR PROJECT, IN CONTEXT</div>
-              <h1>Good questions.<br /><span>Grounded answers.</span></h1>
-              <p className="welcome-description">Ask across your project activity. Orbit brings together live data and gives you an answer you can trace back to its source.</p>
+              <h1>Ask your workspace.</h1>
 
               <form className="ask-card" onSubmit={handleSubmit}>
                 <label className="sr-only" htmlFor="question">Ask a question about your project</label>
@@ -166,23 +173,21 @@ function App() {
                     {sources?.github && <span className="source-chip"><Icon name="github" size={15} /> GitHub</span>}
                     {sources?.notion && <span className="source-chip"><span className="notion-mark">N</span> Notion</span>}
                     {sources?.jira && <span className="source-chip"><Icon name="jira" size={15} /> Jira</span>}
+                    {sources?.gmail && <span className="source-chip"><Icon name="gmail" size={15} /> Gmail</span>}
                     {(sources?.github || sources?.notion || sources?.jira) && <span className="context-divider" />}
-                    <span className="context-hint">Answers include source citations</span>
                   </div>
                   <button className="ask-button" type="submit" disabled={!question.trim()}><span>Ask Orbit</span><Icon name="arrow" size={16} /></button>
                 </div>
               </form>
 
-              <div className="suggestions"><span className="suggestion-label">TRY ASKING</span>{suggestions.map((suggestion) => <button key={suggestion} type="button" className="suggestion-chip" onClick={() => { setQuestion(suggestion); ask(suggestion); }}>{suggestion}<Icon name="arrow" size={13} /></button>)}</div>
+              <div className="suggestions">{suggestions.slice(0, 3).map((suggestion) => <button key={suggestion} type="button" className="suggestion-chip" onClick={() => { setQuestion(suggestion); ask(suggestion); }}>{suggestion}<Icon name="arrow" size={13} /></button>)}</div>
             </section>
           )}
 
           {loading && (
             <section className="loading-state" aria-live="polite">
               <div className="loading-orbit"><span /><span /><span /></div>
-              <div className="loading-kicker">ORBIT IS THINKING</div>
-              <h2>Following the evidence<span className="loading-dots">...</span></h2>
-              <p>Breaking down your question, checking connected sources, and preparing a cited answer.</p>
+              <h2>Retrieving evidence</h2>
               <div className="loading-steps"><span className="step-active"><Icon name="check" size={14} /> Decompose question</span><span className="step-active"><Icon name="search" size={14} /> Retrieve live data</span><span><Icon name="spark" size={14} /> Write cited answer</span></div>
             </section>
           )}
@@ -197,10 +202,9 @@ function App() {
             <section className="result-layout">
               <div className="answer-column">
                 <button className="back-link" type="button" onClick={() => { setResult(null); setError(""); }}><span>←</span> Ask another question</button>
-                <div className="question-label">YOUR QUESTION</div>
                 <h1 className="result-question">{result.original_question}</h1>
                 <div className="answer-card">
-                  <div className="answer-heading"><span className="answer-icon"><Icon name="spark" size={17} /></span><span>ORBIT’S ANSWER</span><span className="grounded-badge"><Icon name="check" size={13} /> Grounded in sources</span></div>
+                  <div className="answer-heading"><span className="answer-icon"><Icon name="spark" size={17} /></span><span>ORBIT’S ANSWER</span><span className="grounded-badge"><Icon name="check" size={13} /> {result.citations?.length || 0} linked source{result.citations?.length === 1 ? "" : "s"}</span></div>
                   <div className="answer-body">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                       {result.final_answer || "No answer was generated."}
@@ -219,21 +223,23 @@ function App() {
                     </div>
                   )}
                 </div>
-                <div className="answer-footnote"><Icon name="check" size={14} /> Answer generated from retrieved project data. Verify important details at the linked sources.</div>
                 <button className="ask-again-button" type="button" onClick={() => { setResult(null); setQuestion(""); }}> <Icon name="plus" size={16} /> Ask another question</button>
               </div>
 
               <aside className="activity-column">
                 <div className="activity-header"><div><span className="activity-kicker">BEHIND THE ANSWER</span><h2>Research trail</h2></div><span className="trail-check"><Icon name="check" size={15} /></span></div>
-                <div className="trail-summary"><span className="live-dot" /> {successfulSources} source{successfulSources === 1 ? "" : "s"} searched</div>
+                <div className="trail-summary"><span className="live-dot" /> <strong>{successfulSources}</strong> successful retrieval{successfulSources === 1 ? "" : "s"}<span className="trail-summary-divider" /><strong>{result.citations?.length ?? 0}</strong> linked source{result.citations?.length === 1 ? "" : "s"}</div>
                 <div className="trail-list">
                   <div className="trail-item"><span className="trail-index done"><Icon name="check" size={13} /></span><div><strong>Question decomposed</strong><small>{result.subquestions?.length ?? 0} focused subquestion{result.subquestions?.length === 1 ? "" : "s"}</small></div></div>
                   <div className="trail-item"><span className="trail-index done"><Icon name="check" size={13} /></span><div><strong>Sources selected</strong><small>{result.routes?.map((route) => route.sources?.map((source) => sourceLabels[source] || source).join(" + ")).filter(Boolean).join(", ") || "No sources"}</small></div></div>
                   {result.subquestions?.map((subquestion, index) => {
-                    const retrieval = result.retrieval_results?.find((item) => item.subquestion === subquestion);
-                    const succeeded = retrieval?.status === "success";
-                    const retrievalIcon = retrieval?.source === "github" ? "github" : retrieval?.source === "jira" ? "jira" : "search";
-                    return <div className="retrieval-step" key={`${subquestion}-${index}`}><div className={`retrieval-source-icon ${succeeded ? "source-success" : "source-pending"}`}><Icon name={retrievalIcon} size={15} /></div><div className="retrieval-copy"><strong>{sourceLabels[retrieval?.source] || retrieval?.source || "Source"} retrieval</strong><small>{subquestion}</small>{retrieval?.source === "jira" && retrieval?.result?.jira_question && <small>Jira query: {retrieval.result.jira_question}</small>}{retrieval?.error && <small className="retrieval-error">{retrieval.error}</small>}</div><span className={`retrieval-status ${succeeded ? "success" : "pending"}`}>{succeeded ? "DONE" : retrieval?.status?.replace("_", " ") || "SKIPPED"}</span></div>;
+                    const retrievals = result.retrieval_results?.filter((item) => item.subquestion === subquestion) ?? [];
+                    return retrievals.map((retrieval, retrievalIndex) => {
+                      const succeeded = retrieval.status === "success";
+                      const retrievalIcon = retrieval.source === "github" ? "github" : retrieval.source === "jira" ? "jira" : "search";
+                      const count = evidenceCount(retrieval);
+                      return <div className="retrieval-step" key={`${subquestion}-${index}-${retrievalIndex}`}><div className={`retrieval-source-icon ${succeeded ? "source-success" : "source-pending"}`}><Icon name={retrievalIcon} size={15} /></div><div className="retrieval-copy"><strong>{sourceLabels[retrieval.source] || retrieval.source} retrieval <span className="retrieval-count">{succeeded ? `${count} result${count === 1 ? "" : "s"}` : ""}</span></strong><small>{subquestion}</small>{retrieval.source === "jira" && retrieval.result?.jira_question && <small className="retrieval-detail"><b>Jira query:</b> {retrieval.result.jira_question}</small>}{retrieval.result?.tool && <small className="retrieval-detail"><b>Tool:</b> {retrieval.result.tool}</small>}{retrieval.error && <small className="retrieval-error">{retrieval.error}</small>}</div><span className={`retrieval-status ${succeeded ? "success" : "pending"}`}>{succeeded ? "DONE" : retrieval.status?.replace("_", " ") || "SKIPPED"}</span></div>;
+                    });
                   })}
                   <div className="trail-item final-step"><span className="trail-index done"><Icon name="spark" size={13} /></span><div><strong>Answer prepared</strong><small>{result.citations?.length ?? 0} verified source citations</small></div></div>
                 </div>
@@ -242,9 +248,6 @@ function App() {
             </section>
           )}
 
-          {!result && !loading && !error && (
-            <div className="privacy-note"><span className="privacy-lock">✳</span> Your credentials stay in your local backend. Read-only source access.</div>
-          )}
         </div>
       </main>
     </div>

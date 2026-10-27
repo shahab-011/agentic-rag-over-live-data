@@ -14,3 +14,14 @@ frontend/dist/
 
 # Local environment variables and credentials
 .env
+
+
+
+
+# Google OAuth credentials and tokens
+credentials/
+credentials/gmail-oauth-client.json
+credentials/gmail-token.json
+credentials/*.json
+token.json
+gmail-token.json

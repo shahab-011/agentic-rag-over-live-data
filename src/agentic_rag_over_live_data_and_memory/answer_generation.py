@@ -28,7 +28,20 @@ Do not invent facts, dates, or URLs. If evidence is insufficient, say so.
 Every factual claim supported by a supplied source must include its inline
 citation number, for example [1]. Use only citation numbers in the source
 list. If no sources are available, explain that the retrieved evidence cannot
-support an answer. Return JSON with an "answer" string field.
+support an answer.
+
+Write a polished, easy-to-read response:
+1. Start with a short overview or direct answer.
+2. Use descriptive headings and short paragraphs instead of long prose.
+3. Use compact Markdown bullet lists for findings and limitations.
+4. Use a Markdown table when comparing records, statuses, owners, or sources.
+5. Keep separate labeled sections for "Verified findings", "Inferences",
+   "Missing evidence", and "Limitations" when those distinctions matter.
+6. Report Jira status and GitHub status separately; never merge them.
+7. State uncertainty clearly. Distinguish facts from hypotheses and inferred relationships.
+8. Avoid raw JSON, dumps, internal tool names, and implementation jargon.
+9. Keep the answer useful without hiding material gaps.
+Return JSON with an "answer" string field.
 """
 
 

@@ -16,6 +16,9 @@ from agentic_rag_over_live_data_and_memory.decomposition import (
 from agentic_rag_over_live_data_and_memory.github_retriever import (
     retrieve_github,
 )
+from agentic_rag_over_live_data_and_memory.gmail_retriever import (
+    retrieve_gmail,
+)
 from agentic_rag_over_live_data_and_memory.jira_retriever import (
     retrieve_jira,
 )
@@ -109,18 +112,28 @@ def build_workflow_graph():
             )
         return {"retrieval_results": [result]}
 
-    def retrieve_gmail_node(
+    async def retrieve_gmail_node(
         state: WorkflowState,
     ) -> dict[str, list[RetrievalResult]]:
         task = state["current_task"]
         if task is None:
             raise RuntimeError("Gmail retrieval was selected without a task.")
-        result = RetrievalResult(
-            subquestion=task["subquestion"],
-            source="gmail",
-            status="not_implemented",
-            error="Gmail retrieval has not been connected yet.",
-        )
+        subquestion = task["subquestion"]
+        try:
+            evidence = await retrieve_gmail(subquestion)
+            result = RetrievalResult(
+                subquestion=subquestion,
+                source="gmail",
+                status="success",
+                result=evidence,
+            )
+        except Exception as exc:  # noqa: BLE001 - report source failures in the workflow result.
+            result = RetrievalResult(
+                subquestion=subquestion,
+                source="gmail",
+                status="error",
+                error=str(exc),
+            )
         return {"retrieval_results": [result]}
 
     async def retrieve_notion_node(
