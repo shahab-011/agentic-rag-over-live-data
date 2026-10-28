@@ -7,9 +7,10 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+from langchain_core.exceptions import OutputParserException
 from langchain_groq import ChatGroq
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 load_dotenv()
 
@@ -262,14 +263,22 @@ def _plan_jira_call(
         JiraQueryPlan,
         method="json_mode",
     )
-    plan = planner.invoke(
-        [
-            ("system", JIRA_QUERY_REFINER_PROMPT),
-            ("human", f"Jira subquestion:\n{question}"),
-        ]
-    )
-    if not isinstance(plan, JiraQueryPlan):
-        plan = JiraQueryPlan.model_validate(plan)
+    try:
+        plan = planner.invoke(
+            [
+                ("system", JIRA_QUERY_REFINER_PROMPT),
+                ("human", f"Jira subquestion:\n{question}"),
+            ]
+        )
+        if not isinstance(plan, JiraQueryPlan):
+            plan = JiraQueryPlan.model_validate(plan)
+    except (OutputParserException, ValidationError, ValueError) as exc:
+        plan = _fallback_jira_plan(question)
+        if plan is None:
+            raise ValueError(
+                "Jira could not create a valid read-only search plan, and the "
+                "question does not include a project or issue key for a safe fallback."
+            ) from exc
 
     operation_tools = {
         "search_issues": "search_jira_issues",
@@ -277,9 +286,14 @@ def _plan_jira_call(
         "list_projects": "list_jira_projects",
     }
     if plan.operation == "unsupported":
-        raise ValueError(
-            "Jira access is read-only; it cannot create, edit, or delete issues."
-        )
+        if re.search(r"\b(create|edit|transition|assign|delete|remove)\b", question, re.I):
+            raise ValueError(
+                "Jira access is read-only; it cannot create, edit, or delete issues."
+            )
+        fallback = _fallback_jira_plan(question)
+        if fallback is None:
+            raise ValueError("The Jira planner returned an unsupported operation.")
+        plan = fallback
     tool_name = operation_tools[plan.operation]
     arguments: dict[str, Any]
     if plan.operation == "list_projects":
@@ -355,6 +369,30 @@ def _plan_jira_call(
         arguments,
     )
     return selected_tool, arguments, plan.jira_question
+
+
+def _fallback_jira_plan(question: str) -> JiraQueryPlan | None:
+    """Build a conservative project search when Groq returns invalid JSON."""
+    issue_keys = [match.group(1).upper() for match in _ISSUE_KEY.finditer(question)]
+    project_key = issue_keys[0].rsplit("-", 1)[0] if issue_keys else None
+    if project_key is None:
+        project_keys = re.findall(r"\b[A-Z][A-Z0-9]{1,9}\b", question)
+        project_key = next(
+            (
+                key
+                for key in project_keys
+                if key not in {"GMAIL", "GITHUB", "JIRA", "MCP", "API"}
+            ),
+            None,
+        )
+    if not project_key:
+        return None
+
+    return JiraQueryPlan(
+        jira_question=question[:1000],
+        operation="search_issues",
+        jql=f"project = {project_key} ORDER BY updated DESC",
+    )
 
 
 async def retrieve_jira(subquestion: str) -> dict[str, Any]:

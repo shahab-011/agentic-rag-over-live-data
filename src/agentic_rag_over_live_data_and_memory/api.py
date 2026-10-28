@@ -95,16 +95,20 @@ class ApiHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._send_json(400, {"error": str(exc)})
             return
-        except Exception:
+        except Exception as exc:
             LOGGER.exception("Workflow request failed")
+            error_type = type(exc).__name__
+            if error_type == "APIConnectionError":
+                error = (
+                    "Could not connect to the language model API. Check that this "
+                    "computer can reach Groq and that a firewall or VPN is not blocking it."
+                )
+            else:
+                detail = str(exc).strip()
+                error = f"{error_type}: {detail}" if detail else error_type
             self._send_json(
                 500,
-                {
-                    "error": (
-                        "The assistant could not complete this request. "
-                        "Check the API server logs for details."
-                    )
-                },
+                {"error": error[:500]},
             )
             return
 

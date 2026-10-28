@@ -22,6 +22,7 @@ _SENDER_PHRASE = re.compile(
     r"\bfrom\s+([\w.@+-]+(?:\s+(?!and\b|with\b|about\b|on\b|that\b|to\b)[\w.@+-]+){0,2})",
     re.IGNORECASE,
 )
+_PROJECT_EXPANSIONS = {"ECP": "Enterprise Cloud Platform"}
 
 
 def _project_root() -> Path:
@@ -145,12 +146,56 @@ def _gmail_search_query(question: str) -> tuple[str, str | None]:
     return query, sender if subject else None
 
 
+def _gmail_search_queries(question: str) -> list[str]:
+    """Prefer broad project identifiers over conversational filler words."""
+    query, sender = _gmail_search_query(question)
+    if query.startswith("subject:"):
+        queries = [query]
+        if sender:
+            queries.append(query.rsplit(" from:", 1)[0])
+        return queries
+
+    project_codes = re.findall(r"\b[A-Z]{2,10}(?:-\d+)?\b", question)
+    project_code = next(
+        (
+            re.sub(r"-\d+$", "", code)
+            for code in project_codes
+            if code not in {"GMAIL", "GITHUB", "JIRA", "MCP", "API"}
+        ),
+        None,
+    )
+    if project_code:
+        queries = [project_code]
+        expansion = _PROJECT_EXPANSIONS.get(project_code)
+        if expansion:
+            queries.append(f'"{expansion}"')
+        return queries
+
+    return [query]
+
+
 def _wants_full_email(question: str) -> bool:
     return bool(re.search(r"\b(full|entire|complete|whole|body|read)\b", question, re.IGNORECASE))
 
 
+def _wants_project_context(question: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(summarize|summary|progress|blockers?|owners?|updates?|status|project)\b",
+            question,
+            re.IGNORECASE,
+        )
+    )
+
+
 async def _invoke(tool: Any, arguments: dict[str, Any]) -> Any:
-    return await tool.ainvoke(_validate_arguments(tool, arguments))
+    result = await tool.ainvoke(_validate_arguments(tool, arguments))
+    normalized = _normalize_mcp_result(result)
+    if isinstance(normalized, str) and normalized.lstrip().startswith("Error executing tool"):
+        raise RuntimeError(normalized)
+    if isinstance(normalized, dict) and normalized.get("isError"):
+        raise RuntimeError(str(normalized.get("error", "Gmail MCP tool failed.")))
+    return result
 
 
 async def retrieve_gmail(subquestion: str) -> dict[str, Any]:
@@ -168,34 +213,43 @@ async def retrieve_gmail(subquestion: str) -> dict[str, Any]:
         arguments: dict[str, Any] = {}
     else:
         tool_name = "search_emails"
-        query, sender = _gmail_search_query(question)
-        arguments = {"query": query, "max_results": 10}
+        queries = _gmail_search_queries(question)
+        arguments = {"query": queries[0], "max_results": 10}
 
     tool = tool_map.get(tool_name)
     if tool is None:
         raise RuntimeError(f"The read-only Gmail MCP tool {tool_name!r} is unavailable.")
 
-    raw_result = await _invoke(tool, arguments)
-    evidence = _normalize_mcp_result(raw_result)
+    if tool_name == "search_emails":
+        collected: dict[str, dict[str, Any]] = {}
+        searched_queries = []
+        for query in queries:
+            searched_queries.append(query)
+            raw_result = await _invoke(tool, {"query": query, "max_results": 10})
+            query_evidence = _normalize_mcp_result(raw_result)
+            if isinstance(query_evidence, dict):
+                for message in query_evidence.get("messages", []):
+                    if isinstance(message, dict) and message.get("id"):
+                        collected[message["id"]] = message
+        evidence = {
+            "query": searched_queries,
+            "count": len(collected),
+            "messages": list(collected.values())[:10],
+        }
+    else:
+        raw_result = await _invoke(tool, arguments)
+        evidence = _normalize_mcp_result(raw_result)
 
     # Gmail search returns headers and snippets. For explicit full-message
     # requests, use the matched IDs with get_email to retrieve the body.
-    if tool_name == "search_emails" and _wants_full_email(question):
+    include_full_email = _wants_full_email(question)
+    if tool_name == "search_emails" and (include_full_email or _wants_project_context(question)):
         messages = evidence.get("messages", []) if isinstance(evidence, dict) else []
-        if not messages and sender and query.startswith("subject:"):
-            # Display names are not always indexed consistently by Gmail's
-            # from: operator. Retry the exact subject without the sender filter.
-            fallback_query = query.rsplit(" from:", 1)[0]
-            fallback = await _invoke(tool, {"query": fallback_query, "max_results": 10})
-            fallback_evidence = _normalize_mcp_result(fallback)
-            if isinstance(fallback_evidence, dict):
-                evidence = fallback_evidence
-                messages = evidence.get("messages", [])
-
         get_email_tool = tool_map.get("get_email")
         if messages and get_email_tool is not None:
             full_emails = []
-            for message in messages[:3]:
+            maximum_bodies = 3 if include_full_email else 5
+            for message in messages[:maximum_bodies]:
                 message_id = message.get("id") if isinstance(message, dict) else None
                 if message_id:
                     full_result = await _invoke(get_email_tool, {"message_id": message_id})
@@ -203,7 +257,7 @@ async def retrieve_gmail(subquestion: str) -> dict[str, Any]:
             evidence = {**evidence, "full_emails": full_emails}
 
     return {
-        "tool": tool.name,
+        "tool": "get_email" if tool_name == "search_emails" and include_full_email else tool.name,
         "authenticated": is_gmail_authenticated(),
         "evidence": evidence,
     }

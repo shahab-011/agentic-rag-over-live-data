@@ -463,6 +463,70 @@ def _validate_github_call(
     return arguments
 
 
+def _listing_tool_arguments(tool: Any, owner: str, repo: str) -> dict[str, Any] | None:
+    schema = tool.args_schema if isinstance(tool.args_schema, dict) else {}
+    properties = schema.get("properties", {})
+    arguments: dict[str, Any] = {}
+    if "owner" in properties:
+        arguments["owner"] = owner
+    if "repo" in properties:
+        arguments["repo"] = repo
+
+    for name in schema.get("required", []):
+        if name in arguments:
+            continue
+        property_schema = properties.get(name, {})
+        if "default" in property_schema:
+            arguments[name] = property_schema["default"]
+        elif name == "state" and "all" in property_schema.get("enum", []):
+            arguments[name] = "all"
+        else:
+            return None
+    return _validate_github_call(tool, arguments)
+
+
+def _is_broad_activity_question(question: str) -> bool:
+    normalized = question.lower()
+    return (
+        bool(re.search(r"\b(recent|latest|activity)\b", normalized))
+        and "commit" in normalized
+        and ("pull request" in normalized or "pull requests" in normalized)
+        and "issue" in normalized
+    )
+
+
+async def _retrieve_github_activity(
+    tools: list[Any],
+    owner: str,
+    repo: str,
+) -> dict[str, Any] | None:
+    tool_map = {tool.name: tool for tool in tools if tool.name in READ_ONLY_GITHUB_TOOLS}
+    categories = (
+        ("commits", "list_commits"),
+        ("pull_requests", "list_pull_requests"),
+        ("issues", "list_issues"),
+    )
+    evidence: dict[str, Any] = {}
+    for category, tool_name in categories:
+        tool = tool_map.get(tool_name)
+        if tool is None:
+            continue
+        arguments = _listing_tool_arguments(tool, owner, repo)
+        if arguments is None:
+            continue
+        result = await tool.ainvoke(arguments)
+        normalized = normalize_mcp_result(result)
+        if isinstance(normalized, str) and normalized.lstrip().startswith("Error executing tool"):
+            raise RuntimeError(normalized)
+        if tool_name == "list_issues":
+            normalized = add_issue_urls(normalized, owner, repo)
+        evidence[category] = normalized
+
+    if not evidence:
+        return None
+    return evidence
+
+
 def plan_github_call(
     subquestion: str,
     tools: list[Any],
@@ -642,12 +706,48 @@ async def retrieve_github(
 
     client = get_github_client()
     tools = await client.get_tools()
-    tool, arguments = plan_github_call(
-        subquestion,
-        tools,
-        owner,
-        repo,
-    )
+    if _is_broad_activity_question(subquestion):
+        activity_evidence = await _retrieve_github_activity(tools, owner, repo)
+        if activity_evidence is not None:
+            return {
+                "source": "github",
+                "tool": "list_github_activity",
+                "repository": f"{owner}/{repo}",
+                "subquestion": subquestion,
+                "evidence": activity_evidence,
+            }
+
+    try:
+        tool, arguments = plan_github_call(
+            subquestion,
+            tools,
+            owner,
+            repo,
+        )
+    except ValueError as exc:
+        if "unavailable or non-read-only GitHub tool" not in str(exc):
+            raise
+        fallback_names = []
+        normalized_question = subquestion.lower()
+        if "pull request" in normalized_question:
+            fallback_names.append("list_pull_requests")
+        if "commit" in normalized_question:
+            fallback_names.append("list_commits")
+        if "issue" in normalized_question:
+            fallback_names.append("list_issues")
+        fallback = next(
+            (
+                (tool, _listing_tool_arguments(tool, owner, repo))
+                for name in fallback_names
+                for tool in tools
+                if tool.name == name
+                and _listing_tool_arguments(tool, owner, repo) is not None
+            ),
+            None,
+        )
+        if fallback is None:
+            raise
+        tool, arguments = fallback
 
     if tool.name == "get_file_contents":
         structured_evidence = await get_github_file_contents(

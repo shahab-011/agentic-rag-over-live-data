@@ -1,4 +1,5 @@
 import os
+import re
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
@@ -91,14 +92,28 @@ def _plain_text(payload: dict[str, Any]) -> str:
             super().__init__()
             self.parts: list[str] = []
 
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag in {"br", "p", "div", "li", "tr", "h1", "h2", "h3"}:
+                self.parts.append("\n")
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag in {"p", "div", "li", "tr", "h1", "h2", "h3"}:
+                self.parts.append("\n")
+
         def handle_data(self, data: str) -> None:
-            cleaned = data.strip()
-            if cleaned:
-                self.parts.append(cleaned)
+            self.parts.append(data)
 
     extractor = _TextExtractor()
     extractor.feed(html_parts[0])
-    return unescape(" ".join(extractor.parts))
+    text = unescape("".join(extractor.parts))
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    paragraphs: list[str] = []
+    for line in lines:
+        if line:
+            paragraphs.append(line)
+        elif paragraphs and paragraphs[-1] != "":
+            paragraphs.append("")
+    return "\n".join(paragraphs).strip()
 
 
 def _message_url(message_id: str) -> str:
