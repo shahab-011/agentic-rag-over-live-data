@@ -70,7 +70,7 @@ function App() {
         return response.json();
       })
       .then(setSources)
-      .catch(() => setSources({}));
+      .catch(() => setSources({ api_unavailable: true }));
   }, []);
 
   async function ask(nextQuestion = question) {
@@ -93,6 +93,12 @@ function App() {
         throw new Error(payload.error || "The request could not be completed.");
       }
       setResult(payload);
+      fetch("/api/sources")
+        .then((sourceResponse) => sourceResponse.ok ? sourceResponse.json() : null)
+        .then((nextSources) => {
+          if (nextSources) setSources(nextSources);
+        })
+        .catch(() => {});
     } catch (requestError) {
       setError(requestError.message || "Unable to connect to the assistant.");
     } finally {
@@ -108,7 +114,10 @@ function App() {
   const successfulSources = result?.retrieval_results?.filter(
     (item) => item.status === "success",
   ).length ?? 0;
-  const connectedSourceCount = Object.values(sources || {}).filter(Boolean).length;
+  const connectedSourceCount = ["github", "notion", "jira", "gmail"]
+    .filter((source) => source === "gmail"
+      ? sources?.gmail_authenticated
+      : sources?.[source]).length;
 
   return (
     <div className="app-shell">
@@ -137,11 +146,34 @@ function App() {
               { key: "jira", label: "Jira", icon: <Icon name="jira" size={15} /> },
               { key: "gmail", label: "Gmail", icon: <Icon name="gmail" size={15} /> },
             ].map((source) => {
-              const connected = sources?.[source.key];
+              const configured = sources?.[source.key];
+              const connected = source.key === "gmail"
+                ? sources?.gmail_authenticated
+                : configured;
+              const status = !sources || sources.api_unavailable
+                ? sources?.api_unavailable ? "API unavailable" : "checking..."
+                : source.key === "gmail"
+                  ? !configured
+                    ? "not configured"
+                    : connected
+                      ? "authorization saved"
+                      : "needs authorization"
+                  : connected
+                    ? "configured"
+                    : "not configured";
+              const detail = sources?.api_unavailable
+                ? "Start the backend API"
+                : source.key === "gmail"
+                ? !configured
+                  ? "Add OAuth client JSON"
+                  : connected
+                    ? "Google access checked on Gmail search"
+                    : "Sign-in opens on first Gmail search"
+                : "Read-only access";
               return (
                 <div className="connection-card" key={source.key}>
                   <span className={`connection-icon ${source.key}`}>{source.icon}</span>
-                  <div><strong>{source.label} {connected ? "configured" : sources ? "not configured" : "checking..."}</strong><small>Read-only access</small></div>
+                  <div><strong>{source.label} {status}</strong><small>{detail}</small></div>
                   {connected && <span className="live-dot" />}
                 </div>
               );

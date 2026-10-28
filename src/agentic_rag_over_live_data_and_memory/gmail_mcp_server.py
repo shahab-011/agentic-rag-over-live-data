@@ -1,4 +1,6 @@
 import os
+from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +38,8 @@ def get_gmail_service() -> Any:
 
     credentials: Credentials | None = None
     if token_path.is_file():
-        credentials = Credentials.from_authorized_user_file(str(token_path), [READ_ONLY_SCOPE])
+        # Read the scopes that Google actually granted from the token file.
+        credentials = Credentials.from_authorized_user_file(str(token_path))
 
     if credentials is None or not credentials.valid:
         if credentials is not None and credentials.expired and credentials.refresh_token:
@@ -51,19 +54,26 @@ def get_gmail_service() -> Any:
         token_path.parent.mkdir(parents=True, exist_ok=True)
         token_path.write_text(credentials.to_json(), encoding="utf-8")
 
-    if not credentials.has_scopes([READ_ONLY_SCOPE]):
+    if READ_ONLY_SCOPE not in set(credentials.scopes or ()):
         raise ValueError("Existing Gmail token does not grant the read-only Gmail scope.")
 
     return build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
 
 def _plain_text(payload: dict[str, Any]) -> str:
+    html_parts: list[str] = []
+
     def visit(part: dict[str, Any]) -> str | None:
-        if part.get("mimeType") == "text/plain" and isinstance(part.get("body"), dict):
+        if part.get("mimeType") in {"text/plain", "text/html"} and isinstance(part.get("body"), dict):
             data = part["body"].get("data")
             if isinstance(data, str):
                 import base64
-                return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode("utf-8", errors="replace")
+                decoded = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode(
+                    "utf-8", errors="replace"
+                )
+                if part.get("mimeType") == "text/plain":
+                    return decoded
+                html_parts.append(decoded)
         for child in part.get("parts", []):
             text = visit(child)
             if text:
@@ -71,7 +81,28 @@ def _plain_text(payload: dict[str, Any]) -> str:
         return None
 
     text = visit(payload.get("payload", {}))
-    return text[:4000] if text else ""
+    if text:
+        return text
+    if not html_parts:
+        return ""
+
+    class _TextExtractor(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.parts: list[str] = []
+
+        def handle_data(self, data: str) -> None:
+            cleaned = data.strip()
+            if cleaned:
+                self.parts.append(cleaned)
+
+    extractor = _TextExtractor()
+    extractor.feed(html_parts[0])
+    return unescape(" ".join(extractor.parts))
+
+
+def _message_url(message_id: str) -> str:
+    return f"https://mail.google.com/mail/u/0/#all/{message_id}"
 
 
 @server.tool()
@@ -103,6 +134,7 @@ def search_emails(query: str, max_results: int = 10) -> str:
         }
         results.append({
             "id": message["id"],
+            "url": _message_url(message["id"]),
             "thread_id": detail.get("threadId"),
             "subject": headers.get("Subject", ""),
             "from": headers.get("From", ""),
@@ -134,6 +166,7 @@ def get_email(message_id: str) -> str:
     import json
     return json.dumps({
         "id": message.get("id"),
+        "url": _message_url(message.get("id", "")),
         "thread_id": message.get("threadId"),
         "subject": headers.get("Subject", ""),
         "from": headers.get("From", ""),

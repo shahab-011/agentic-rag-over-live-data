@@ -1,15 +1,27 @@
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+from google.oauth2.credentials import Credentials
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 load_dotenv()
 
 READ_ONLY_GMAIL_TOOLS = frozenset({"search_emails", "get_email", "list_labels"})
+READ_ONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+_QUOTED_PHRASE = re.compile(r"[\"“‘'](.+?)[\"”’']")
+_SUBJECT_PHRASE = re.compile(
+    r"\bsubject\s*(?:is\s+|:\s*)?[\"“‘'](.+?)[\"”’']",
+    re.IGNORECASE,
+)
+_SENDER_PHRASE = re.compile(
+    r"\bfrom\s+([\w.@+-]+(?:\s+(?!and\b|with\b|about\b|on\b|that\b|to\b)[\w.@+-]+){0,2})",
+    re.IGNORECASE,
+)
 
 
 def _project_root() -> Path:
@@ -33,7 +45,23 @@ def is_gmail_configured() -> bool:
 
 def is_gmail_authenticated() -> bool:
     _, token_path = _oauth_paths()
-    return token_path.is_file()
+    if not token_path.is_file():
+        return False
+
+    try:
+        # Load the scopes recorded in the token file. Passing a requested scope
+        # here would make the library report that scope without verifying it was
+        # actually granted by Google.
+        credentials = Credentials.from_authorized_user_file(str(token_path))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+
+    granted_scopes = set(credentials.scopes or ())
+    has_read_scope = READ_ONLY_SCOPE in granted_scopes
+    usable_or_refreshable = credentials.valid or (
+        credentials.expired and bool(credentials.refresh_token)
+    )
+    return bool(credentials.token and has_read_scope and usable_or_refreshable)
 
 
 def get_gmail_client() -> MultiServerMCPClient:
@@ -86,6 +114,45 @@ def _validate_arguments(tool: Any, arguments: dict[str, Any]) -> dict[str, Any]:
     return arguments
 
 
+def _gmail_search_query(question: str) -> tuple[str, str | None]:
+    """Convert common natural-language email requests into Gmail search syntax."""
+    subject_match = _SUBJECT_PHRASE.search(question)
+    quoted_match = _QUOTED_PHRASE.search(question)
+    subject = subject_match.group(1).strip() if subject_match else None
+    phrase = subject or (quoted_match.group(1).strip() if quoted_match else None)
+
+    sender_match = _SENDER_PHRASE.search(question)
+    sender = sender_match.group(1).strip() if sender_match else None
+
+    if subject:
+        query = f'subject:"{subject}"'
+    elif phrase:
+        query = f'"{phrase}"'
+    else:
+        # Strip conversational filler that Gmail would otherwise treat as
+        # required search terms (for example, "show me the full email").
+        query = re.sub(
+            r"\b(show|find|read|fetch|full|entire|complete|email|emails|message|messages|"
+            r"in|my|gmail|with|the|about|please|me|from|subject|titled|called)\b",
+            " ",
+            question,
+            flags=re.IGNORECASE,
+        )
+        query = " ".join(query.split()).strip(" ?.,:;") or question
+
+    if sender:
+        query = f"{query} from:{sender}"
+    return query, sender if subject else None
+
+
+def _wants_full_email(question: str) -> bool:
+    return bool(re.search(r"\b(full|entire|complete|whole|body|read)\b", question, re.IGNORECASE))
+
+
+async def _invoke(tool: Any, arguments: dict[str, Any]) -> Any:
+    return await tool.ainvoke(_validate_arguments(tool, arguments))
+
+
 async def retrieve_gmail(subquestion: str) -> dict[str, Any]:
     question = subquestion.strip()
     if not question:
@@ -101,16 +168,42 @@ async def retrieve_gmail(subquestion: str) -> dict[str, Any]:
         arguments: dict[str, Any] = {}
     else:
         tool_name = "search_emails"
-        arguments = {"query": question, "max_results": 10}
+        query, sender = _gmail_search_query(question)
+        arguments = {"query": query, "max_results": 10}
 
     tool = tool_map.get(tool_name)
     if tool is None:
         raise RuntimeError(f"The read-only Gmail MCP tool {tool_name!r} is unavailable.")
 
-    validated = _validate_arguments(tool, arguments)
-    raw_result = await tool.ainvoke(validated)
+    raw_result = await _invoke(tool, arguments)
+    evidence = _normalize_mcp_result(raw_result)
+
+    # Gmail search returns headers and snippets. For explicit full-message
+    # requests, use the matched IDs with get_email to retrieve the body.
+    if tool_name == "search_emails" and _wants_full_email(question):
+        messages = evidence.get("messages", []) if isinstance(evidence, dict) else []
+        if not messages and sender and query.startswith("subject:"):
+            # Display names are not always indexed consistently by Gmail's
+            # from: operator. Retry the exact subject without the sender filter.
+            fallback_query = query.rsplit(" from:", 1)[0]
+            fallback = await _invoke(tool, {"query": fallback_query, "max_results": 10})
+            fallback_evidence = _normalize_mcp_result(fallback)
+            if isinstance(fallback_evidence, dict):
+                evidence = fallback_evidence
+                messages = evidence.get("messages", [])
+
+        get_email_tool = tool_map.get("get_email")
+        if messages and get_email_tool is not None:
+            full_emails = []
+            for message in messages[:3]:
+                message_id = message.get("id") if isinstance(message, dict) else None
+                if message_id:
+                    full_result = await _invoke(get_email_tool, {"message_id": message_id})
+                    full_emails.append(_normalize_mcp_result(full_result))
+            evidence = {**evidence, "full_emails": full_emails}
+
     return {
         "tool": tool.name,
         "authenticated": is_gmail_authenticated(),
-        "evidence": _normalize_mcp_result(raw_result),
+        "evidence": evidence,
     }

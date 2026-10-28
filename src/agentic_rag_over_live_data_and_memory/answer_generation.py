@@ -219,6 +219,51 @@ def _generate_file_contents_answer(
     return answer, citations
 
 
+def _generate_full_gmail_answer(
+    retrieval_result: RetrievalResult,
+) -> tuple[str, list[Citation]]:
+    result = retrieval_result.result or {}
+    evidence = result.get("evidence")
+    full_emails = evidence.get("full_emails") if isinstance(evidence, dict) else None
+    if not isinstance(full_emails, list) or not full_emails:
+        raise ValueError("Full Gmail message evidence is missing.")
+
+    answer_parts: list[str] = []
+    citations: list[Citation] = []
+    for email in full_emails:
+        if not isinstance(email, dict):
+            continue
+        url = email.get("url")
+        if not _valid_web_url(url):
+            continue
+
+        citation = Citation(
+            number=len(citations) + 1,
+            source="gmail",
+            subquestion=retrieval_result.subquestion,
+            url=url,
+        )
+        citations.append(citation)
+
+        title = email.get("subject") or "(no subject)"
+        lines = [f"**Subject:** {title} [{citation.number}]"]
+        for label, key in (("From", "from"), ("To", "to"), ("Date", "date")):
+            value = email.get(key)
+            if isinstance(value, str) and value:
+                lines.append(f"**{label}:** {value}")
+        lines.extend(["", "**Full message**"])
+        body = email.get("body")
+        if isinstance(body, str) and body:
+            lines.extend(f"> {line}" if line else ">" for line in body.splitlines())
+        else:
+            lines.append("> The message body was empty or could not be decoded.")
+        answer_parts.append("\n".join(lines))
+
+    if not answer_parts:
+        raise ValueError("Full Gmail messages did not include valid source links.")
+    return "\n\n---\n\n".join(answer_parts), citations
+
+
 def generate_cited_answer(
     question: str,
     retrieval_results: list[RetrievalResult],
@@ -226,6 +271,15 @@ def generate_cited_answer(
     """Generate an answer and validate its inline citations against evidence."""
 
     for result in retrieval_results:
+        if (
+            result.status == "success"
+            and result.source == "gmail"
+            and result.result is not None
+            and isinstance(result.result.get("evidence"), dict)
+            and result.result["evidence"].get("full_emails")
+        ):
+            return _generate_full_gmail_answer(result)
+
         if (
             result.status == "success"
             and result.result is not None
